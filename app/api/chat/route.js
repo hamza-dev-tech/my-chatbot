@@ -10,13 +10,6 @@ let chatSessionId = null;
 export async function POST(request) {
   try {
     const { message } = await request.json();
-    if (!message || typeof message !== 'string') {
-      return NextResponse.json({
-        reply: "I’m your Genius Ventures assistant! Ask me anything about selling your home or setting up a quick chat. 😊",
-      });
-    }
-
-    const lowerMessage = message.toLowerCase().trim();
 
     // Firestore content or fallback info
     const companyRef = collection(db, 'company_info');
@@ -55,7 +48,7 @@ export async function POST(request) {
       },
     });
 
-    // 🔥 Initial Greeting Shown Before First Input
+    // 🔥 Initial Greeting Shown on First Load
     if (!introShown) {
       introShown = true;
       return NextResponse.json({
@@ -69,6 +62,15 @@ Are you looking to:
 Just type a number or say what you're thinking!`,
       });
     }
+
+    // Handle empty or invalid input
+    if (!message || typeof message !== 'string') {
+      return NextResponse.json({
+        reply: "I’m your Genius Ventures assistant! Ask me anything about selling your home or setting up a quick chat. 😊",
+      });
+    }
+
+    const lowerMessage = message.toLowerCase().trim();
 
     // Handle "1" or "2" as fast triggers
     if (lowerMessage === '1') {
