@@ -2,6 +2,8 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useForm } from 'react-hook-form';
+import { db } from '../../firebase'; // Adjust path if needed
+import { doc, onSnapshot } from 'firebase/firestore';
 import MeetingScheduler from './MeetingScheduler';
 import OfferForm from './OfferForm';
 
@@ -10,22 +12,52 @@ export default function Chatbot() {
   const [showScheduler, setShowScheduler] = useState(false);
   const [showOfferForm, setShowOfferForm] = useState(false);
   const [teamStatus, setTeamStatus] = useState('Checking...');
+  const [humanMode, setHumanMode] = useState(false);
+  const [chatSessionId, setChatSessionId] = useState(null); // Store session ID
   const { register, handleSubmit, reset } = useForm();
 
+  // Team status check
   useEffect(() => {
     const checkTeamStatus = () => {
       const now = new Date();
-      const estOffset = -4 * 60;
+      const estOffset = -4 * 60; // EST offset
       const estTime = new Date(now.getTime() + estOffset * 60 * 1000);
       const hours = estTime.getUTCHours();
       const day = estTime.getUTCDay();
       const isBusinessHours = day >= 1 && day <= 5 && hours >= 9 && hours < 17;
-      setTeamStatus('Online');
+      setTeamStatus(isBusinessHours ? 'Online' : 'Offline');
     };
     checkTeamStatus();
     const interval = setInterval(checkTeamStatus, 60000);
     return () => clearInterval(interval);
   }, []);
+
+  // Real-time listener for agent messages
+  useEffect(() => {
+    let unsubChat;
+    if (humanMode && chatSessionId) {
+      unsubChat = onSnapshot(doc(db, 'chat_sessions', chatSessionId), (docSnap) => {
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.agentMessages && data.agentMessages.length > 0) {
+            const newAgentMessages = data.agentMessages.map((msg) => ({
+              role: 'agent',
+              content: `Agent: ${msg.text}`,
+            }));
+            setMessages((prev) => [
+              ...prev.filter((m) => m.role !== 'agent'), // Clear old agent messages to avoid duplicates
+              ...newAgentMessages,
+            ]);
+          }
+        }
+      }, (error) => {
+        console.error('Firestore Listener Error:', error);
+      });
+    }
+    return () => {
+      if (unsubChat) unsubChat();
+    };
+  }, [humanMode, chatSessionId]);
 
   const onSubmit = async (data) => {
     const userMessage = { role: 'user', content: data.message };
@@ -38,18 +70,28 @@ export default function Chatbot() {
         action: response.data.action,
       };
       setMessages([...messages, userMessage, botMessage]);
+
+      // Handle actions from backend
       if (botMessage.action === 'schedule') {
         setShowScheduler(true);
         setShowOfferForm(false);
+        setHumanMode(false);
       } else if (botMessage.action === 'offer') {
         setShowOfferForm(true);
         setShowScheduler(false);
+        setHumanMode(false);
+      } else if (botMessage.action === 'human') {
+        setHumanMode(true);
+        setShowScheduler(false);
+        setShowOfferForm(false);
+        setChatSessionId(response.data.chatSessionId || chatSessionId); // Use session ID if returned
       } else {
         setShowScheduler(false);
         setShowOfferForm(false);
       }
     } catch (error) {
-      setMessages([...messages, userMessage, { role: 'bot', content: 'Sorry, something went wrong.' }]);
+      console.error('Chat Error:', error);
+      setMessages([...messages, userMessage, { role: 'bot', content: 'Oops, something glitchy happened! 😅 Try again?' }]);
     }
     reset();
   };
@@ -76,14 +118,13 @@ export default function Chatbot() {
               className={`max-w-md p-4 rounded-lg shadow-sm ${
                 msg.role === 'user'
                   ? 'bg-blue-600 text-white'
+                  : msg.role === 'agent'
+                  ? 'bg-green-100 text-green-800'
                   : 'bg-white text-gray-800 border border-gray-200'
               }`}
             >
-              {/* Split response by newlines and render as paragraphs */}
               {msg.content.split('\n').map((line, index) => (
-                <p key={index} className="mb-2 last:mb-0 text-sm leading-relaxed">
-                  {line}
-                </p>
+                <p key={index} className="mb-2 last:mb-0 text-sm leading-relaxed">{line}</p>
               ))}
             </div>
           </div>
@@ -95,7 +136,8 @@ export default function Chatbot() {
         <input
           {...register('message', { required: true })}
           className="flex-1 p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-200 text-sm"
-          placeholder="Ask about selling your home..."
+          placeholder={humanMode ? "Waiting for a human... still wanna chat?" : "Ask about selling your home..."}
+          disabled={humanMode && teamStatus !== 'Online' && !messages.some(m => m.role === 'agent')}
         />
         <button
           type="submit"
@@ -104,7 +146,16 @@ export default function Chatbot() {
           Send
         </button>
       </form>
-      <div className="mt-4 text-center text-gray-500 text-xs">
+      <div className="mt-2 text-center ">
+        <button
+          onClick={() => onSubmit({ message: 'talk to human' })}
+          className="text-white hover:underline text-sm bg-gray-400 rounded-lg px-4 py-2 mt-2 cursor-pointer"
+          disabled={teamStatus !== 'Online' || humanMode}
+        >
+          Talk to a Human
+        </button>
+      </div>
+      <div className="mt-2 text-center text-gray-500 text-xs">
         <p>87 Satisfied Clients | 150 Homes Purchased</p>
       </div>
     </div>

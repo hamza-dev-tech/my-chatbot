@@ -1,17 +1,18 @@
 import { NextResponse } from 'next/server';
-import { db } from '../../../firebase';
-import { collection, getDocs } from 'firebase/firestore';
+import { db } from '../../../firebase'; // Adjust path if needed
+import { collection, getDocs, doc, addDoc, getDoc, updateDoc } from 'firebase/firestore';
 import axios from 'axios';
 
 // Session memory (resets each session/server start)
 let introShown = false;
+let chatSessionId = null;
 
 export async function POST(request) {
   try {
     const { message } = await request.json();
     if (!message || typeof message !== 'string') {
       return NextResponse.json({
-        reply: "I’m your Genius Ventures assistant! Ask me anything about selling your home or setting up a quick chat. 😊",
+        reply: "I’m your Genius Ventures assistant! Ask me anything about selling your home, scheduling a chat, or type 'human' to talk to a real pro. 😊",
       });
     }
 
@@ -54,25 +55,57 @@ export async function POST(request) {
       },
     });
 
-    // 🔥 Initial Greeting Shown Before First Input
+    // 🔥 Initial Greeting with "Talk to Human" Option
     if (!introShown) {
       introShown = true;
       return NextResponse.json({
-        reply: `Hi there! 👋 I’m the official assistant for Genius Ventures Holdings LLC—your friendly neighborhood home-buying experts in South Florida.
+        reply: `Hi there! 👋 I’m the official assistant for Genius Ventures Holdings LLC—your South Florida home-buying champs. 
 
 Are you looking to:
 1️⃣ Schedule a meeting or call?
 2️⃣ Sell your home for cash?
-3️⃣ Ask something else?
+3️⃣ Chat with a human agent? (Just say "human"!)
+4️⃣ Ask something else?
 
-Just type a number or say what you're thinking!`,
+Type a number or whatever’s on your mind!`,
       });
+    }
+
+    // Inside the "human" trigger block
+if (lowerMessage.includes('human') || lowerMessage.includes('talk to human') || lowerMessage.includes('agent') || lowerMessage === '3') {
+  if (!chatSessionId) {
+    const sessionDoc = await addDoc(collection(db, 'chat_sessions'), {
+      userMessages: [{ text: message, timestamp: new Date().toISOString() }],
+      status: 'pending',
+      assignedAgent: null,
+      createdAt: new Date().toISOString(),
+    });
+    chatSessionId = sessionDoc.id;
+  }
+  return NextResponse.json({
+    reply: 'Hold tight! 🚀 A Genius Ventures human is zooming your way. What’s your home deal while we wait—selling fast or just curious?',
+    action: 'human',
+    chatSessionId: chatSessionId, // Send session ID to frontend
+  });
+}
+
+    // Store messages in active human chat session
+    if (chatSessionId) {
+      const sessionRef = doc(db, 'chat_sessions', chatSessionId);
+      const sessionSnap = await getDoc(sessionRef);
+      const sessionData = sessionSnap.data();
+      await updateDoc(sessionRef, {
+        userMessages: [...sessionData.userMessages, { text: message, timestamp: new Date().toISOString() }],
+      });
+      if (sessionData.status === 'active' && sessionData.assignedAgent) {
+        return NextResponse.json({ reply: 'Message sent to our human rockstar! 🌟 They’ll reply soon—anything else on your mind?' });
+      }
     }
 
     // Handle "1" or "2" as fast triggers
     if (lowerMessage === '1') {
       return NextResponse.json({
-        reply: `Great! You can book your appointment here: 🗓️
+        reply: `Great! You can book your appointment here: 🗓️ https://geniusventuresholdings.com/schedule
 
 What time of day works best for you—morning or afternoon?`,
         action: 'schedule',
@@ -89,31 +122,23 @@ Or just drop your name and property address right here, and we’ll get rolling!
     }
 
     // Direct message intent detection
-    if (
-      ['schedule', 'appointment', 'meeting', 'book', 'call'].some((word) =>
-        lowerMessage.includes(word)
-      )
-    ) {
+    if (['schedule', 'appointment', 'meeting', 'book', 'call'].some((word) => lowerMessage.includes(word))) {
       return NextResponse.json({
         reply: `Sure thing! You can schedule a time with our team here: https://geniusventuresholdings.com/schedule
 
-Let me know what works best for you.`,
+Let me know what works best for you—or say "human" if you’d rather chat live!`,
         action: 'schedule',
       });
     }
 
-    if (
-      ['sell', 'selling', 'offer', 'cash', 'home', 'property', 'house'].some((word) =>
-        lowerMessage.includes(word)
-      )
-    ) {
+    if (['sell', 'selling', 'offer', 'cash', 'home', 'property', 'house'].some((word) => lowerMessage.includes(word))) {
       return NextResponse.json({
-        reply: `Sounds like you're ready to sell! 🏠 Just head over to: https://geniusventuresholdings.com/ or tell me a bit about the property (address, condition, etc.) and I’ll help from there.`,
+        reply: `Sounds like you're ready to sell! 🏠 Just head over to: https://geniusventuresholdings.com/ or tell me a bit about the property (address, condition, etc.) and I’ll help from there. Want a human instead? Just say so!`,
         action: 'offer',
       });
     }
 
-    // ✨ Gemini handles natural open chats
+    // ✨ Gemini handles natural open chats with human option
     const geminiResponse = await axios.post(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent',
       {
@@ -121,7 +146,7 @@ Let me know what works best for you.`,
           {
             parts: [
               {
-                text: `You’re a lively, sharp-witted AI assistant for Genius Ventures Holdings LLC, a South Florida-based powerhouse that buys homes for cash at lightning speed. Use this rich company info: ${context}, packed with details on services (fast cash offers, as-is buys, creative solutions), contact (phone: 954-569-5575, email: geniusventuresrei@gmail.com), and perks (quick closings, no fees). The user just said: "${message}". Reply in fluent, natural English only—no extra "hello" or greetings unless it fits the flow. Sound like a friendly, human teammate with a knack for humor, tossing in clever quips, playful jabs, and emojis (e.g., 🏠💸😂) to keep it fun. Keep replies concise, laser-focused, and dripping with Genius Ventures vibes—weave in prior chat context if relevant. If they veer off-topic, steer it back to home-selling with a cheeky twist that ties to our biz. When they ask questions, spice it up with a short, relevant joke tied to real estate or cash deals. Lean on the company data for meaty, specific answers, and throw in curious follow-ups (e.g., “Where’s your place?”, “What’s the home vibe?”) to spark convo. Avoid robotic vibes—make it feel like a chat with a South Florida pro who’s obsessed with turning homes into cash piles!`,
+                text: `You’re a lively, sharp-witted AI assistant for Genius Ventures Holdings LLC, a South Florida-based powerhouse that buys homes for cash at lightning speed. Use this rich company info: ${context}, packed with details on services (fast cash offers, as-is buys, creative solutions), contact (phone: 954-569-5575, email: geniusventuresrei@gmail.com), and perks (quick closings, no fees). The user just said: "${message}". Reply in fluent, natural English only—no extra "hello" unless it fits the flow. Sound like a friendly, human teammate with a knack for humor, tossing in clever quips, playful jabs, and emojis (e.g., 🏠💸😂) to keep it fun. Keep replies concise, laser-focused, and dripping with Genius Ventures vibes—weave in prior chat context if relevant. If they veer off-topic, steer it back to home-selling with a cheeky twist that ties to our biz. When they ask questions, spice it up with a short, relevant joke tied to real estate or cash deals. Lean on the company data for meaty, specific answers, and throw in curious follow-ups (e.g., “Where’s your place?”, “What’s the home vibe?”) to spark convo. Suggest "talk to human" as an option if they seem unsure or curious. Avoid robotic vibes—make it feel like a chat with a South Florida pro who’s obsessed with turning homes into cash piles!`,
               },
             ],
           },
@@ -135,12 +160,12 @@ Let me know what works best for you.`,
     );
 
     let reply = geminiResponse.data.candidates[0].content.parts[0].text.trim();
-    reply = reply.replace(/[*_#]+/g, ''); // clean formatting
+    reply = reply.replace(/[*_#]+/g, ''); // Clean formatting
     return NextResponse.json({ reply });
   } catch (error) {
     console.error('Chat API Error:', error.message);
     return NextResponse.json({
-      reply: `Oops! Something went wrong on my end 🛠️ but Genius Ventures is still here for you. Let’s get back on track—want to schedule something or sell your place?`,
+      reply: `Oops! Something went wonky 🛠️, but Genius Ventures has your back. Want to schedule a call, sell your home, or chat with a human? Just say "human" if you’d rather talk live!`,
     });
   }
 }
